@@ -166,17 +166,6 @@
     cio.observe(n);
   });
 
-  // pointer glow (pixel-dot spotlight)
-  $$("[data-glow]").forEach(function (box) {
-    box.addEventListener("pointermove", function (e) {
-      var r = box.getBoundingClientRect(),
-        g = $(".glow", box);
-      if (!g) return;
-      g.style.setProperty("--x", e.clientX - r.left + "px");
-      g.style.setProperty("--y", e.clientY - r.top + "px");
-    });
-  });
-
   // scroll-scrubbed process section (desktop only; stacked everywhere else)
   var proc = $("[data-process]");
   if (proc) {
@@ -439,4 +428,580 @@
         btn.disabled = false;
       });
   });
+
+  // ================= live layer: the portfolio runs its own tests =================
+  var fine = matchMedia("(hover: hover) and (pointer: fine)"),
+    wide = matchMedia("(min-width: 1001px)");
+  var TOTAL = 14,
+    passed = 0,
+    bugs = 0,
+    suite = {};
+
+  // --- test runner HUD (bottom-left): real checks run as you explore
+  var runner = document.createElement("div");
+  runner.className = "runner";
+  runner.innerHTML =
+    '<div class="runner-log" role="log" hidden></div>' +
+    '<button type="button" class="runner-pill" aria-expanded="false" aria-label="Live test run. Tap for details">' +
+    '<svg viewBox="0 0 24 24" class="ring" aria-hidden="true"><circle cx="12" cy="12" r="9" class="bg"/><circle cx="12" cy="12" r="9" class="fg"/></svg>' +
+    '<span class="rt"><b data-pass>0</b>/' +
+    TOTAL +
+    ' tests</span><i class="dot"></i></button>';
+  document.body.appendChild(runner);
+  var logEl = $(".runner-log", runner),
+    pill = $(".runner-pill", runner),
+    fg = $(".fg", runner),
+    passEl = $("[data-pass]", runner);
+  var CIRC = 2 * Math.PI * 9;
+  fg.style.strokeDasharray = CIRC;
+  fg.style.strokeDashoffset = CIRC;
+  function stamp() {
+    var d = new Date();
+    return (
+      ("0" + d.getMinutes()).slice(-2) + ":" + ("0" + d.getSeconds()).slice(-2)
+    );
+  }
+  function log(ok, text) {
+    var p = document.createElement("p");
+    p.className = ok ? "ok" : "bad";
+    p.innerHTML =
+      "<span>" +
+      (ok ? "✓" : "✗") +
+      "</span><i>" +
+      text +
+      "</i><em>" +
+      stamp() +
+      "</em>";
+    logEl.appendChild(p);
+    while (logEl.children.length > 40) logEl.removeChild(logEl.firstChild);
+    logEl.scrollTop = logEl.scrollHeight;
+  }
+  function bump() {
+    runner.classList.remove("bump");
+    void runner.offsetWidth;
+    runner.classList.add("bump");
+  }
+  function record(id, ok, text) {
+    if (suite[id]) return;
+    suite[id] = true;
+    log(ok, text);
+    bump();
+    if (ok) {
+      passed++;
+      passEl.textContent = passed;
+      fg.style.strokeDashoffset = CIRC * (1 - passed / TOTAL);
+    }
+    if (passed === TOTAL) {
+      runner.classList.add("green");
+      setTimeout(function () {
+        log(true, "suite green: all " + TOTAL + " passed");
+      }, 500);
+    }
+  }
+  pill.addEventListener("click", function () {
+    var open = logEl.hidden;
+    logEl.hidden = !open;
+    pill.setAttribute("aria-expanded", open);
+  });
+  document.addEventListener("keydown", function (e) {
+    if (e.key === "Escape" && !logEl.hidden) {
+      logEl.hidden = true;
+      pill.setAttribute("aria-expanded", "false");
+    }
+  });
+  document.addEventListener("click", function (e) {
+    if (!logEl.hidden && !runner.contains(e.target)) {
+      logEl.hidden = true;
+      pill.setAttribute("aria-expanded", "false");
+    }
+  });
+
+  // boot checks run automatically, one after another
+  [
+    [
+      "boot-render",
+      "page renders",
+      function () {
+        return !!$(".hero h1");
+      },
+    ],
+    [
+      "boot-fonts",
+      "fonts load",
+      function () {
+        return document.fonts
+          ? document.fonts.ready.then(function () {
+              return true;
+            })
+          : true;
+      },
+    ],
+    [
+      "boot-hero",
+      "hero image decodes",
+      function () {
+        var i = $(".visual img");
+        return (
+          !i ||
+          (i.decode
+            ? i.decode().then(
+                function () {
+                  return true;
+                },
+                function () {
+                  return false;
+                },
+              )
+            : i.complete)
+        );
+      },
+    ],
+    [
+      "boot-tokens",
+      "theme tokens resolve",
+      function () {
+        return !!getComputedStyle(root).getPropertyValue("--brand").trim();
+      },
+    ],
+  ].forEach(function (b, i) {
+    setTimeout(
+      function () {
+        Promise.resolve(b[2]()).then(function (ok) {
+          record(b[0], !!ok, b[1]);
+        });
+      },
+      900 + i * 700,
+    );
+  });
+
+  // section checks run the first time each section scrolls into view
+  function imgsOk(scope) {
+    return Promise.all(
+      $$("img", scope).map(function (im) {
+        im.loading = "eager";
+        return im.complete
+          ? Promise.resolve(im.naturalWidth > 0)
+          : new Promise(function (res) {
+              im.addEventListener("load", function () {
+                res(true);
+              });
+              im.addEventListener("error", function () {
+                res(false);
+              });
+              setTimeout(function () {
+                res(im.naturalWidth > 0);
+              }, 5000);
+            });
+      }),
+    ).then(function (r) {
+      return r.every(Boolean);
+    });
+  }
+  var checks = {
+    about: [
+      "about section loads",
+      function (s) {
+        return !!$("h2", s) && imgsOk(s);
+      },
+    ],
+    work: [
+      "6 work cards load",
+      function (s) {
+        return $$(".card", s).length === 6 && imgsOk(s);
+      },
+    ],
+    process: [
+      "4 test steps render",
+      function (s) {
+        return $$(".step", s).length === 4;
+      },
+    ],
+    experience: [
+      "experience timeline renders",
+      function (s) {
+        return $$(".xp-card", s).length >= 2 && imgsOk(s);
+      },
+    ],
+    skills: [
+      "skill groups render",
+      function (s) {
+        return $$(".skill", s).length === 6;
+      },
+    ],
+    education: [
+      "education logos load",
+      function (s) {
+        return $$(".edu-card", s).length === 4 && imgsOk(s);
+      },
+    ],
+    contact: [
+      "contact form is wired",
+      function (s) {
+        var f = $("form", s);
+        return (
+          !!f &&
+          /formspree\.io/.test(f.action) &&
+          $$("[required]", f).length >= 3
+        );
+      },
+    ],
+  };
+  var secObs = new IntersectionObserver(
+    function (es) {
+      es.forEach(function (e) {
+        if (!e.isIntersecting) return;
+        var id = e.target.id,
+          c = checks[id];
+        secObs.unobserve(e.target);
+        if (!c) return;
+        setTimeout(function () {
+          Promise.resolve(c[1](e.target)).then(function (ok) {
+            record("sec-" + id, !!ok, c[0]);
+          });
+        }, 450);
+      });
+    },
+    { threshold: 0.2 },
+  );
+  Object.keys(checks).forEach(function (id) {
+    var s = document.getElementById(id);
+    if (s) secObs.observe(s);
+  });
+
+  // interaction checks
+  $("[data-theme-toggle]").addEventListener("click", function () {
+    record("theme", true, "theme switch works");
+  });
+  var cardGrid = $(".grid");
+  if (cardGrid) {
+    cardGrid.addEventListener(
+      "pointerenter",
+      function () {
+        record("cards", true, "cards respond to hover");
+      },
+      { once: true },
+    );
+    cardGrid.addEventListener(
+      "scroll",
+      function () {
+        record("cards", true, "cards swipe smoothly");
+      },
+      { once: true, passive: true },
+    );
+  }
+
+  // --- live clock
+  var facts = $(".facts");
+  if (facts) {
+    var live = document.createElement("span");
+    live.className = "mono live";
+    live.innerHTML = '<i class="pulse"></i><span data-clock></span> IST';
+    facts.appendChild(live);
+    var clock = $("[data-clock]", live);
+    (function tickClock() {
+      try {
+        clock.textContent = new Date().toLocaleTimeString("en-GB", {
+          timeZone: "Asia/Kolkata",
+          hour: "2-digit",
+          minute: "2-digit",
+          second: "2-digit",
+        });
+      } catch (e) {
+        clock.textContent = "";
+      }
+      setTimeout(tickClock, 1000);
+    })();
+  }
+
+  // --- typing console: lines appear one after another when a step is active
+  $$(".console pre").forEach(function (pre) {
+    pre.innerHTML = pre.innerHTML
+      .split("\n")
+      .map(function (l, i) {
+        return (
+          '<span class="ln" style="--n:' +
+          i +
+          '">' +
+          (l || "&nbsp;") +
+          "</span>"
+        );
+      })
+      .join("");
+  });
+
+  if (!calm) {
+    // --- headline cycles through what gets built in
+    var h1 = $(".hero h1"),
+      mute = h1 && $(".mute", h1);
+    if (mute) {
+      h1.setAttribute("aria-label", h1.textContent.replace(/\s+/g, " ").trim());
+      var words = ["quality", "coverage", "trust", "stability"],
+        wi = 0;
+      mute.innerHTML =
+        'who builds <span class="swap" aria-hidden="true">quality</span> in.';
+      var sw = $(".swap", mute);
+      function reserve() {
+        h1.style.minHeight = "";
+        var m = 0,
+          keep = sw.textContent;
+        words.forEach(function (w) {
+          sw.textContent = w;
+          m = Math.max(m, h1.offsetHeight);
+        });
+        sw.textContent = keep;
+        h1.style.minHeight = m + "px";
+      }
+      (document.fonts ? document.fonts.ready : Promise.resolve()).then(reserve);
+      addEventListener("resize", reserve);
+      var ease = "cubic-bezier(0.33, 1, 0.68, 1)";
+      setInterval(function () {
+        if (document.hidden || !sw.animate) return;
+        wi = (wi + 1) % words.length;
+        sw.animate(
+          [
+            { opacity: 1, transform: "none", filter: "blur(0)" },
+            { opacity: 0, transform: "translateY(-45%)", filter: "blur(6px)" },
+          ],
+          { duration: 320, easing: "ease-in", fill: "forwards" },
+        )
+          .finished.then(function () {
+            sw.textContent = words[wi];
+            return sw.animate(
+              [
+                {
+                  opacity: 0,
+                  transform: "translateY(45%)",
+                  filter: "blur(6px)",
+                },
+                { opacity: 1, transform: "none", filter: "blur(0)" },
+              ],
+              { duration: 520, easing: ease, fill: "forwards" },
+            ).finished;
+          })
+          .then(function () {
+            sw.getAnimations().forEach(function (a) {
+              a.cancel();
+            });
+          })
+          .catch(function () {});
+      }, 3000);
+    }
+
+    // --- a bug wanders across the hero photo; click or tap to squash it
+    var visual = $(".visual");
+    if (visual) {
+      var bug = document.createElement("button");
+      bug.type = "button";
+      bug.className = "bug";
+      bug.setAttribute("aria-label", "Squash the bug, just for fun");
+      bug.title = "Catch me";
+      bug.innerHTML =
+        '<svg viewBox="0 0 32 32" aria-hidden="true"><g stroke="#06303d" stroke-width="1.4" stroke-linecap="round"><path d="M6 10l5 4M26 10l-5 4M5 17h6M27 17h-6M7 25l5-4M25 25l-5-4M13 5l-2-3M19 5l2-3"/></g><ellipse cx="16" cy="18" rx="8" ry="9.5" fill="#1aa0bd" stroke="#06303d" stroke-width="1.4"/><path d="M16 9v19" stroke="#06303d" stroke-width="1.2"/><circle cx="16" cy="8" r="4" fill="#06303d"/><circle cx="12.5" cy="16" r="1.7" fill="#e8fbff"/><circle cx="19.5" cy="16" r="1.7" fill="#e8fbff"/><circle cx="12.5" cy="22" r="1.4" fill="#e8fbff"/><circle cx="19.5" cy="22" r="1.4" fill="#e8fbff"/></svg>';
+      var tally = document.createElement("span");
+      tally.className = "bugtally";
+      tally.hidden = true;
+      visual.appendChild(bug);
+      visual.appendChild(tally);
+      var alive = true,
+        bx = -40,
+        by = 80,
+        ang = 90,
+        timer;
+      function put(x, y, dur) {
+        var target = (Math.atan2(y - by, x - bx) * 180) / Math.PI + 90,
+          delta = ((target - ang + 540) % 360) - 180;
+        ang += delta;
+        bug.style.transitionDuration = dur + "ms";
+        bug.style.transform =
+          "translate(" + x + "px," + y + "px) rotate(" + ang + "deg)";
+        bx = x;
+        by = y;
+      }
+      function wander() {
+        clearTimeout(timer);
+        if (!alive) return;
+        if (document.hidden) {
+          timer = setTimeout(wander, 1500);
+          return;
+        }
+        var w = Math.max(60, visual.clientWidth - 48),
+          h = Math.max(60, visual.clientHeight - 48);
+        var nx = 8 + Math.random() * w,
+          ny = 8 + Math.random() * h,
+          dist = Math.hypot(nx - bx, ny - by),
+          dur = Math.max(1500, dist * 9);
+        put(nx, ny, dur);
+        timer = setTimeout(wander, dur + 300 + Math.random() * 900);
+      }
+      bug.style.transform = "translate(-40px,80px) rotate(90deg)";
+      setTimeout(wander, 1800);
+      function burst(cx, cy) {
+        for (var i = 0; i < 12; i++) {
+          var p = document.createElement("i");
+          p.className = "splat";
+          p.style.left = cx + "px";
+          p.style.top = cy + "px";
+          visual.appendChild(p);
+          var a = (i / 12) * 2 * Math.PI,
+            d = 28 + Math.random() * 34;
+          p.animate(
+            [
+              { transform: "translate(0,0) scale(1)", opacity: 1 },
+              {
+                transform:
+                  "translate(" +
+                  Math.cos(a) * d +
+                  "px," +
+                  Math.sin(a) * d +
+                  "px) scale(0)",
+                opacity: 0,
+              },
+            ],
+            {
+              duration: 650 + Math.random() * 250,
+              easing: "cubic-bezier(0.2,0.8,0.2,1)",
+            },
+          ).onfinish = (function (el) {
+            return function () {
+              el.remove();
+            };
+          })(p);
+        }
+      }
+      bug.addEventListener("click", function () {
+        if (!alive) return;
+        alive = false;
+        bugs++;
+        clearTimeout(timer);
+        var r = bug.getBoundingClientRect(),
+          v = visual.getBoundingClientRect();
+        burst(r.left - v.left + r.width / 2, r.top - v.top + r.height / 2);
+        bug.classList.add("dead");
+        tally.hidden = false;
+        tally.textContent = "Bugs squashed: " + bugs;
+        tally.classList.remove("pop");
+        void tally.offsetWidth;
+        tally.classList.add("pop");
+        if (navigator.vibrate) navigator.vibrate(12);
+        if (!suite.bug) record("bug", true, "bug squashed in the hero");
+        else {
+          log(true, "bug #" + bugs + " squashed (demo)");
+          bump();
+        }
+        setTimeout(function () {
+          bug.classList.remove("dead");
+          bug.style.transitionDuration = "0ms";
+          bx = -40;
+          by = 60 + Math.random() * 200;
+          bug.style.transform = "translate(-40px," + by + "px) rotate(90deg)";
+          ang = 90;
+          alive = true;
+          setTimeout(wander, 400);
+        }, 3200);
+      });
+    }
+
+    // --- desktop only: soft light that follows the pointer, tilt on cards, magnetic buttons
+    if (fine.matches && wide.matches) {
+      // custom cursor: dot + glass ring that reacts to what is under it
+      var curEl = document.createElement("div");
+      curEl.className = "cursor";
+      curEl.setAttribute("aria-hidden", "true");
+      curEl.innerHTML =
+        '<div class="c-ring"><i class="c-body"></i><span class="c-label"></span></div><i class="c-dot"></i>';
+      document.body.appendChild(curEl);
+      root.classList.add("has-cursor");
+      var ring = $(".c-ring", curEl),
+        dotEl = $(".c-dot", curEl),
+        label = $(".c-label", curEl);
+      var px = innerWidth / 2,
+        py = innerHeight / 2,
+        rx = px,
+        ry = py,
+        seen = false;
+      function state(t) {
+        var s = "",
+          txt = "";
+        if (t && t.closest) {
+          if (t.closest("input, textarea, select, [contenteditable]"))
+            s = "text";
+          else if (t.closest(".bug")) {
+            s = "bug";
+          } else if (t.closest("a, button, label, [role=button], .pills")) {
+            s = "link";
+          } else if (t.closest(".card")) {
+            s = "card";
+            txt = "View";
+          }
+        }
+        if (curEl.dataset.state !== s) curEl.dataset.state = s;
+        if (label.textContent !== txt) label.textContent = txt;
+      }
+      addEventListener(
+        "pointermove",
+        function (e) {
+          px = e.clientX;
+          py = e.clientY;
+          if (!seen) {
+            seen = true;
+            rx = px;
+            ry = py;
+            curEl.classList.add("on");
+          }
+          state(e.target);
+        },
+        { passive: true },
+      );
+      root.addEventListener("mouseleave", function () {
+        seen = false;
+        curEl.classList.remove("on");
+      });
+      addEventListener("pointerdown", function () {
+        curEl.classList.add("down");
+      });
+      addEventListener("pointerup", function () {
+        curEl.classList.remove("down");
+      });
+      (function loop() {
+        rx += (px - rx) * 0.2;
+        ry += (py - ry) * 0.2;
+        ring.style.transform =
+          "translate3d(" + rx.toFixed(1) + "px," + ry.toFixed(1) + "px,0)";
+        dotEl.style.transform = "translate3d(" + px + "px," + py + "px,0)";
+        requestAnimationFrame(loop);
+      })();
+      $$(".card, .visual").forEach(function (el) {
+        el.addEventListener("pointermove", function (e) {
+          var r = el.getBoundingClientRect(),
+            px = (e.clientX - r.left) / r.width - 0.5,
+            py = (e.clientY - r.top) / r.height - 0.5;
+          el.style.transform =
+            "perspective(900px) rotateX(" +
+            (-py * 5).toFixed(2) +
+            "deg) rotateY(" +
+            (px * 6).toFixed(2) +
+            "deg) translateY(-4px)";
+          el.classList.add("tilting");
+        });
+        el.addEventListener("pointerleave", function () {
+          el.style.transform = "";
+          el.classList.remove("tilting");
+        });
+      });
+      $$(".hero .btn, form .btn").forEach(function (b) {
+        b.addEventListener("pointermove", function (e) {
+          var r = b.getBoundingClientRect();
+          b.style.transform =
+            "translate(" +
+            ((e.clientX - r.left - r.width / 2) * 0.16).toFixed(1) +
+            "px," +
+            ((e.clientY - r.top - r.height / 2) * 0.28).toFixed(1) +
+            "px)";
+        });
+        b.addEventListener("pointerleave", function () {
+          b.style.transform = "";
+        });
+      });
+    }
+  }
 })();
